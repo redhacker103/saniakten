@@ -36,102 +36,147 @@ h2{font-size:22px;margin:0 0 4px}h3{font-size:13px;color:var(--mu);text-transfor
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 // === HIER EINTRAGEN (Supabase > Project Settings > API) ===
-const SUPABASE_URL = "https://kshmvipcfmdyjyhnuiyg.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_wvXxaifV-mqlX1-sJfVGNw_hDf5B6tI"; // der "anon public" Key ist fuer den Browser gedacht, Schutz kommt durch RLS
+const SUPABASE_URL = "https://DEIN-PROJEKT.supabase.co";
+const SUPABASE_ANON_KEY = "DEIN-ANON-KEY";
 // ===========================================================
 const MASSNAHMEN = [
-  "Wundversorgung & Pflaster", "Kühlen (Coolpack)", "Ruhe / Hinlegen",
   "Eigene Notfallmedikamente des Kindes geben (z. B. Antihistaminikum)",
-  "EpiPen / Adrenalin-Autoinjektor anwenden", "Eltern sofort anrufen",
+  "EpiPen / Adrenalin-Autoinjektor anwenden",
   "Rettungsdienst (112) ohne Rücksprache rufen"
 ];
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = s => document.querySelector(s), app = $("#app");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const dt = s => s ? s.split("-").reverse().join(".") : "–";
 const tok = new URLSearchParams(location.search).get("form");
-let kids = [];
+const base = () => location.origin + location.pathname;
+let kids = [], isAdmin = false;
 
 if (tok) parentForm(); else staff();
+
+/* ---------- Elternformular ---------- */
+function addKontakt(k = {}) {
+  const d = document.createElement("div");
+  d.className = "kk card"; d.style.background = "var(--bg)";
+  d.innerHTML = `<label>Name, Beziehung (z. B. Anna Muster, Mutter)</label><input class="kn" value="${esc(k.name)}">
+  <label>Telefon</label><input class="kt" type="tel" value="${esc(k.tel)}">
+  <label class="c"><input type="checkbox" class="ka" ${k.abholen ? "checked" : ""}>Darf das Kind abholen</label>
+  <button class="s" type="button">Entfernen</button>`;
+  d.querySelector("button").onclick = () => d.remove();
+  $("#kontakte").appendChild(d);
+}
 
 async function parentForm() {
   const { data } = await db.rpc("get_form", { t: tok });
   if (!data) { app.innerHTML = `<div class="card"><h2>Link ungültig</h2><p class="mu">Bitte wenden Sie sich an den Schulsanitätsdienst.</p></div>`; return; }
+  const ms = data.massnahmen || [];
   app.innerHTML = `<h1>Notfallinformationen</h1><div class="card">
   <h2>${esc(data.name)}</h2><p class="mu">Diese Angaben helfen unseren Schulsanitätern, im Notfall richtig zu handeln.</p>
   <label>Klasse</label><input id="klasse" value="${esc(data.klasse)}">
-  <label>Allergien (auch Nahrungsmittel, Insektengift, Medikamente)</label><textarea id="allergien" rows="3"></textarea>
-  <label>Dauermedikation / Vorerkrankungen</label><textarea id="medikamente" rows="2"></textarea>
-  <h3>Das dürfen Schulsanitäter tun</h3>
-  ${MASSNAHMEN.map((m,i)=>`<label class="c"><input type="checkbox" class="m" value="${esc(m)}">${esc(m)}</label>`).join("")}
-  <h3>Notfallkontakte</h3>
-  <label>Kontakt 1 (Name, Beziehung)</label><input id="kontakt1"><label>Telefon</label><input id="tel1" type="tel">
-  <label class="c"><input type="checkbox" id="abholen1">Darf das Kind abholen</label>
-  <label>Kontakt 2 (Name, Beziehung)</label><input id="kontakt2"><label>Telefon</label><input id="tel2" type="tel">
-  <label class="c"><input type="checkbox" id="abholen2">Darf das Kind abholen</label>
-  <label>Sonstiges</label><textarea id="notizen" rows="2"></textarea>
+  <label>Geburtsdatum</label><input id="geb" type="date" value="${esc(data.geburtsdatum)}">
+  <label>Allergien (auch Nahrungsmittel, Insektengift, Medikamente)</label><textarea id="allergien" rows="3">${esc(data.allergien)}</textarea>
+  <label>Dauermedikation / Vorerkrankungen</label><textarea id="medikamente" rows="2">${esc(data.medikamente)}</textarea>
+  <h3>Das dürfen Schulsanitäter zusätzlich tun</h3>
+  ${MASSNAHMEN.map(m => `<label class="c"><input type="checkbox" class="m" value="${esc(m)}" ${ms.includes(m) ? "checked" : ""}>${esc(m)}</label>`).join("")}
+  <h3>Notfallkontakte / Abholberechtigte</h3><div id="kontakte"></div>
+  <button class="s" type="button" id="more">+ Weiteren Kontakt hinzufügen</button>
+  <label style="margin-top:14px">Sonstiges</label><textarea id="notizen" rows="2">${esc(data.notizen)}</textarea>
   <label class="c"><input type="checkbox" id="einw">Ich willige ein, dass diese Gesundheitsdaten zum Zweck der Notfallversorgung in der Schule gespeichert und den Schulsanitätern angezeigt werden. Die Einwilligung ist freiwillig und kann jederzeit widerrufen werden.</label>
   <button id="send">Absenden</button><p id="msg" class="mu"></p></div>`;
+  const ks = (data.kontakte && data.kontakte.length) ? data.kontakte : [{}, {}];
+  ks.forEach(addKontakt);
+  $("#more").onclick = () => addKontakt();
   $("#send").onclick = async () => {
     if (!$("#einw").checked) { $("#msg").textContent = "Bitte Einwilligung bestätigen."; return; }
-    const d = { klasse: $("#klasse").value, allergien: $("#allergien").value, medikamente: $("#medikamente").value,
-      massnahmen: [...document.querySelectorAll(".m:checked")].map(x => x.value),
-      kontakt1: $("#kontakt1").value, tel1: $("#tel1").value, abholen1: $("#abholen1").checked,
-      kontakt2: $("#kontakt2").value, tel2: $("#tel2").value, abholen2: $("#abholen2").checked,
-      notizen: $("#notizen").value, einwilligung: true };
+    const kontakte = [...document.querySelectorAll(".kk")].map(e => ({ name: e.querySelector(".kn").value.trim(), tel: e.querySelector(".kt").value.trim(), abholen: e.querySelector(".ka").checked })).filter(k => k.name || k.tel);
+    const d = { klasse: $("#klasse").value, geburtsdatum: $("#geb").value, allergien: $("#allergien").value, medikamente: $("#medikamente").value,
+      massnahmen: [...document.querySelectorAll(".m:checked")].map(x => x.value), kontakte, notizen: $("#notizen").value, einwilligung: true };
     const { error } = await db.rpc("submit_form", { t: tok, d });
-    app.innerHTML = error ? `<div class="card"><h2>Fehler</h2><p>Bitte später erneut versuchen.</p></div>` : `<div class="card"><h2>Vielen Dank ✓</h2><p class="mu">Ihre Angaben wurden gespeichert. Sie können den Link später erneut öffnen, um sie zu ändern.</p></div>`;
+    app.innerHTML = error ? `<div class="card"><h2>Fehler</h2><p>Bitte später erneut versuchen.</p></div>` : `<div class="card"><h2>Vielen Dank ✓</h2><p class="mu">Ihre Angaben wurden gespeichert. Über denselben Link können Sie sie später ändern.</p></div>`;
   };
 }
 
+/* ---------- Sani-Bereich ---------- */
 async function staff() {
   const { data: { session } } = await db.auth.getSession();
   if (!session) return login();
-  const { data } = await db.from("kinder").select("*").order("name");
-  kids = data || [];
+  await load();
+  const { data: adm } = await db.rpc("is_admin");
+  isAdmin = adm === true;
   app.innerHTML = `<div class="top"><h1>Sani-Info</h1><button class="s" id="out">Abmelden</button></div>
-  <input class="search" id="q" placeholder="Name suchen …" autofocus>
+  ${isAdmin ? `<div style="margin-bottom:14px"><button class="s" id="t1">Suche</button> <button class="s" id="t2">Admin</button></div>` : ""}
+  <div id="view"></div>`;
+  $("#out").onclick = async () => { await db.auth.signOut(); location.reload(); };
+  if (isAdmin) { $("#t1").onclick = search; $("#t2").onclick = admin; }
+  search();
+}
+async function load() { const { data } = await db.from("kinder").select("*").order("name"); kids = data || []; }
+
+function search() {
+  $("#view").innerHTML = `<input class="search" id="q" placeholder="Name suchen …" autofocus>
   <div class="card" id="res"></div>
   <div class="card"><h3 style="margin-top:0">Neue Person · Link für Eltern</h3>
   <input id="nn" placeholder="Name des Kindes"><button id="add">Link erstellen</button><p id="lnk" class="mu"></p></div>`;
-  $("#out").onclick = async () => { await db.auth.signOut(); location.reload(); };
   $("#q").oninput = render; render();
   $("#add").onclick = async () => {
     const name = $("#nn").value.trim(); if (!name) return;
     const { data: r, error } = await db.from("kinder").insert({ name }).select().single();
     if (error) { $("#lnk").textContent = "Fehler: " + error.message; return; }
-    const url = location.origin + location.pathname + "?form=" + r.token;
+    const url = base() + "?form=" + r.token;
     $("#lnk").innerHTML = `Link für ${esc(name)} (an Eltern schicken):<br><b style="word-break:break-all">${esc(url)}</b><br><button class="s" id="cp">Kopieren</button>`;
     $("#cp").onclick = () => navigator.clipboard.writeText(url);
-    kids.push(r); render();
+    kids.push(r); kids.sort((a, b) => a.name.localeCompare(b.name)); render();
   };
 }
 
 function render() {
   const q = $("#q").value.toLowerCase().trim();
   const list = kids.filter(k => k.name.toLowerCase().includes(q));
-  if (list.length === 1 || (q && list.length && list[0].name.toLowerCase() === q)) return detail(list[0]);
+  if (q && (list.length === 1 || (list.length && list[0].name.toLowerCase() === q))) return detail(list[0]);
   $("#res").innerHTML = list.length ? list.map(k => `<div class="row" data-id="${k.id}"><span>${esc(k.name)} <span class="mu">${esc(k.klasse)}</span></span><span class="tag ${k.ausgefuellt_am ? "ok" : "bad"}">${k.ausgefuellt_am ? "ausgefüllt" : "offen"}</span></div>`).join("") : `<span class="mu">Keine Treffer</span>`;
   document.querySelectorAll(".row").forEach(r => r.onclick = () => detail(kids.find(k => k.id === r.dataset.id)));
 }
 
 function detail(k) {
   if (!k.ausgefuellt_am) { $("#res").innerHTML = `<h2>${esc(k.name)}</h2><p class="mu">Das Formular wurde noch nicht ausgefüllt.</p>`; return; }
-  const kont = (n, t, a) => n ? `<p><b>${esc(n)}</b> · <a href="tel:${esc(t)}">${esc(t)}</a> ${a ? `<span class="tag ok">darf abholen</span>` : `<span class="tag bad">darf nicht abholen</span>`}</p>` : "";
+  const kont = (k.kontakte || []).map(c => `<p><b>${esc(c.name)}</b> · <a href="tel:${esc(c.tel)}">${esc(c.tel)}</a> ${c.abholen ? `<span class="tag ok">darf abholen</span>` : `<span class="tag bad">darf nicht abholen</span>`}</p>`).join("") || "–";
   const epi = (k.massnahmen || []).some(m => m.includes("EpiPen"));
-  $("#res").innerHTML = `<h2>${esc(k.name)}</h2><span class="mu">Klasse ${esc(k.klasse)}</span>
+  $("#res").innerHTML = `<h2>${esc(k.name)}</h2><span class="mu">Klasse ${esc(k.klasse)} · geb. ${dt(k.geburtsdatum)}</span>
   ${k.allergien ? `<div class="alert">⚠︎ Allergien: ${esc(k.allergien)}</div>` : `<p class="tag ok">Keine Allergien angegeben</p>`}
   <p>EpiPen: <span class="tag ${epi ? "ok" : "bad"}">${epi ? "erlaubt" : "NICHT erlaubt / nicht angegeben"}</span></p>
   <h3>Medikation / Vorerkrankungen</h3><p>${esc(k.medikamente) || "–"}</p>
-  <h3>Erlaubte Maßnahmen</h3>${(k.massnahmen || []).map(m => `<span class="tag ok">${esc(m)}</span>`).join("") || "–"}
-  <h3>Notfallkontakte</h3>${kont(k.kontakt1, k.tel1, k.abholen1)}${kont(k.kontakt2, k.tel2, k.abholen2)}
+  <h3>Zusätzlich erlaubt</h3>${(k.massnahmen || []).map(m => `<span class="tag ok">${esc(m)}</span>`).join("") || "–"}
+  <h3>Notfallkontakte</h3>${kont}
   ${k.notizen ? `<h3>Sonstiges</h3><p>${esc(k.notizen)}</p>` : ""}`;
+}
+
+/* ---------- Admin ---------- */
+function admin() {
+  $("#view").innerHTML = `<div class="card"><div class="top"><h2>Alle Personen (${kids.length})</h2><button class="s" id="csv">CSV-Export</button></div>
+  <p class="mu">Löschen entfernt die Person und alle Daten endgültig.</p>
+  ${kids.map(k => `<div class="row" style="cursor:default"><span>${esc(k.name)} <span class="mu">${esc(k.klasse)} · ${dt(k.geburtsdatum)}</span><br><span class="tag ${k.ausgefuellt_am ? "ok" : "bad"}">${k.ausgefuellt_am ? "ausgefüllt" : "offen"}</span></span>
+  <span><button class="s lk" data-t="${k.token}">Link</button> <button class="s del" data-id="${k.id}" style="color:var(--bad)">Löschen</button></span></div>`).join("")}</div>`;
+  document.querySelectorAll(".lk").forEach(b => b.onclick = () => { navigator.clipboard.writeText(base() + "?form=" + b.dataset.t); b.textContent = "Kopiert ✓"; });
+  document.querySelectorAll(".del").forEach(b => b.onclick = async () => {
+    const k = kids.find(x => x.id === b.dataset.id);
+    if (!confirm(`${k.name} und alle Daten endgültig löschen?`)) return;
+    const { data, error } = await db.from("kinder").delete().eq("id", k.id).select();
+    if (error || !data.length) return alert("Löschen nicht möglich.");
+    kids = kids.filter(x => x.id !== k.id); admin();
+  });
+  $("#csv").onclick = () => {
+    const q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
+    const rows = [["Name", "Klasse", "Geburtsdatum", "Allergien", "Medikation", "Zusätzlich erlaubt", "Kontakte"]].concat(kids.map(k => [k.name, k.klasse, dt(k.geburtsdatum), k.allergien, k.medikamente, (k.massnahmen || []).join(" | "), (k.kontakte || []).map(c => `${c.name} ${c.tel}${c.abholen ? " (darf abholen)" : ""}`).join(" | ")]));
+    const blob = new Blob(["\ufeff" + rows.map(r => r.map(q).join(";")).join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "sani-daten.csv"; a.click();
+  };
 }
 
 function login() {
   app.innerHTML = `<h1>Anmelden</h1><div class="card"><label>E-Mail</label><input id="e" type="email"><label>Passwort</label><input id="p" type="password"><button id="go">Anmelden</button><p id="msg" style="color:var(--bad)"></p></div>`;
   $("#go").onclick = async () => {
     const { error } = await db.auth.signInWithPassword({ email: $("#e").value, password: $("#p").value });
-    error ? $("#msg").textContent = "Anmeldung fehlgeschlagen." : staff();
+    error ? $("#msg").textContent = error.message : staff();
   };
 }
 </script>
